@@ -1,14 +1,15 @@
-"""Integration smoke test for v1.5 Graph Memory with local Ollama.
+"""Integration smoke test for v1.5 Graph Memory with Doubao (豆包) API.
 
-Models required (ollama pull if missing):
-    ollama pull qwen3:0.6b
-    ollama pull nomic-embed-text
+Usage:
+    $env:DOUBAO_API_KEY="your-key-here"
+    python tests/doubao_test.py
 
-Run:
-    python tests/ollama_test.py
+API key is read from environment variable DOUBAO_API_KEY.
+Do NOT hardcode the key — never commit secrets to git.
 """
 
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 
@@ -18,19 +19,27 @@ from agent_memory_manager.embedders.ollama_embedder import OllamaEmbedder
 from agent_memory_manager.llm.openai import OpenAIClient
 from agent_memory_manager.strategies import AtomicFactsStrategy
 
-# ── Ollama 配置 ──────────────────────────────────────────────────────────────
+# ── 豆包 API 配置 ─────────────────────────────────────────────────────────────
 
-LLM_MODEL    = "qwen3:0.6b"
+DOUBAO_API_KEY  = os.environ.get("DOUBAO_API_KEY", "")
+DOUBAO_BASE_URL = "https://ark.volces.com/api/v3"
+DOUBAO_MODEL    = "ep-m-20260129120145-kv6dc"   # doubao-seed-1-6-251015 推理接入点
+
+# Embedder 仍用本地 nomic-embed-text（向量化无需大模型）
 EMBED_MODEL  = "nomic-embed-text"
 OLLAMA_BASE  = "http://localhost:11434"
 
-def make_llm(**kwargs):
+# ─────────────────────────────────────────────────────────────────────────────
+
+def make_llm():
+    if not DOUBAO_API_KEY:
+        raise RuntimeError("请先设置环境变量 DOUBAO_API_KEY")
     return OpenAIClient(
-        model=LLM_MODEL,
-        base_url=f"{OLLAMA_BASE}/v1",
-        keep_alive=0,    # 立即释放 VRAM，避免两模型竞争
-        timeout=120.0,
-        **kwargs,
+        model=DOUBAO_MODEL,
+        api_key=DOUBAO_API_KEY,
+        base_url=DOUBAO_BASE_URL,
+        timeout=60.0,
+        trust_env=True,   # 外部 API 需走系统代理（与本地 Ollama 相反）
     )
 
 def make_embedder():
@@ -40,26 +49,16 @@ def make_embedder():
 # ── 测试函数 ──────────────────────────────────────────────────────────────────
 
 async def test_llm_connectivity():
-    """1. 验证 LLM 可达"""
-    print("\n[1] LLM 连通性测试")
-    import re
+    print("\n[1] 豆包 LLM 连通性测试")
     llm = make_llm()
-    reply = await llm.generate("请用一句话介绍你自己", max_tokens=200)
-    # 显示原始回复（截断）
-    print(f"    原始回复 ({len(reply)} chars): {reply[:300]!r}")
-    # qwen3 思维链模型可能仅输出 <think> 块，去掉后可能为空 — 只要有回复即通过
-    clean = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
-    if clean:
-        print(f"    正文内容: {clean[:200]}")
-    else:
-        print("    注意：模型仅输出 <think> 思维链，正文为空（qwen3 思考模式）")
-    assert len(reply) > 0, "LLM 无任何回复"
+    reply = await llm.generate("请用一句话介绍你自己", max_tokens=100)
+    print(f"    LLM 回复: {reply[:300]}")
+    assert len(reply) > 0
     print("    OK")
 
 
 async def test_embed_connectivity():
-    """2. 验证 Embedder 可达"""
-    print("\n[2] Embedder 连通性测试")
+    print("\n[2] Embedder 连通性测试（本地 nomic-embed-text）")
     emb = make_embedder()
     vec = await emb.embed("测试文本")
     print(f"    向量维度: {len(vec)}")
@@ -68,14 +67,13 @@ async def test_embed_connectivity():
 
 
 async def test_atomic_facts_pipeline():
-    """3. AtomicFacts 策略 + 记忆检索"""
     print("\n[3] AtomicFacts 策略 + 记忆检索")
     manager = MemoryManager(
         backend=InMemoryBackend(),
         strategy=AtomicFactsStrategy(),
         llm=make_llm(),
         embedder=make_embedder(),
-        enable_graph=False,   # 单独测策略，不混入图谱
+        enable_graph=False,
     )
     await manager.initialize()
 
@@ -85,42 +83,35 @@ async def test_atomic_facts_pipeline():
     ]
     result = await manager.add(messages=msgs, session_id="s-facts")
     print(f"    新增记忆: {len(result.added)} 条")
+    for r in result.added:
+        print(f"      - {r.content}")
 
     prompt = await manager.build_prompt("这个用户在做什么项目？", "s-facts")
-    print(f"    增强 Prompt:\n{prompt[:500]}")
-    print("    OK")
+    print(f"    增强 Prompt:\n{prompt}")
     await manager.close()
+    print("    OK")
 
 
 async def test_graph_extraction():
-    """4. v1.5 图谱提取：实体 + 关系（含原始 LLM 输出调试）"""
     print("\n[4] Graph Memory 提取（v1.5）")
     from agent_memory_manager.utils.prompts import ENTITY_EXTRACTION_PROMPT
     from agent_memory_manager.utils.json_utils import extract_json
 
-    # 先单独测试 LLM 的图谱提取能力
+    # 单独验证 LLM 对实体提取提示词的响应质量
     llm = make_llm()
-    test_conv = "USER: 我叫王芳，在字节跳动担任算法工程师，负责推荐系统项目。"
-    try:
-        raw = await llm.generate(
-            ENTITY_EXTRACTION_PROMPT.format(conversation=test_conv),
-            max_tokens=512,
-            temperature=0.3,   # 提高温度避免确定性空输出
-        )
-        print(f"    LLM 原始输出 ({len(raw)} chars): {raw[:400]!r}")
-        if raw:
-            parsed = extract_json(raw)
-            print(f"    解析结果类型: {type(parsed).__name__}")
-            if isinstance(parsed, dict):
-                print(f"    entities={parsed.get('entities', [])} relations={parsed.get('relations', [])}")
-            else:
-                print(f"    解析值: {parsed}")
-        else:
-            print("    LLM 返回空响应（qwen3:0.6b 对长 JSON 提示词不稳定，见下方提示）")
-    except Exception as e:
-        print(f"    LLM 调用异常: {e}")
+    test_conv = "USER: 我叫王芳，在字节跳动担任算法工程师，负责推荐系统项目。\nASSISTANT: 您好王芳！推荐系统是大规模机器学习的典型场景。"
+    raw = await llm.generate(
+        ENTITY_EXTRACTION_PROMPT.format(conversation=test_conv),
+        max_tokens=512,
+        temperature=0.0,
+    )
+    print(f"    LLM 原始输出: {raw[:500]!r}")
+    parsed = extract_json(raw)
+    if isinstance(parsed, dict):
+        print(f"    实体: {[e.get('name') for e in parsed.get('entities', [])]}")
+        print(f"    关系: {[(r.get('subject'), r.get('predicate'), r.get('object')) for r in parsed.get('relations', [])]}")
 
-    # 再测完整 manager 流程
+    # 完整 manager 流程
     manager = MemoryManager(
         backend=InMemoryBackend(),
         strategy=AtomicFactsStrategy(),
@@ -132,22 +123,18 @@ async def test_graph_extraction():
 
     msgs = [
         Message(role=Role.USER, content="我叫王芳，在字节跳动担任算法工程师，负责推荐系统项目。"),
-        Message(role=Role.ASSISTANT, content="您好王芳！推荐系统是大规模机器学习应用的典型场景。"),
+        Message(role=Role.ASSISTANT, content="您好王芳！推荐系统是大规模机器学习的典型场景。"),
     ]
     result = await manager.add(messages=msgs, session_id="s-graph")
-    print(f"    提取实体: {result.entities_extracted} 个")
-    print(f"    提取关系: {result.relations_extracted} 条")
+    print(f"    提取实体: {result.entities_extracted} 个 / 关系: {result.relations_extracted} 条")
 
     stats = await manager.get_stats("s-graph")
     print(f"    图谱统计: {stats.graph_entity_count} 实体 / {stats.graph_relation_count} 关系")
-    if result.entities_extracted == 0:
-        print("    提示：qwen3:0.6b 模型较小，图谱提取结果不稳定，建议换用 qwen2.5:7b 等更大模型")
     await manager.close()
     print("    OK")
 
 
 async def test_graph_query_api():
-    """5. v1.5 图谱查询 API：query_graph / get_entity / list_entities"""
     print("\n[5] Graph 查询 API（v1.5）")
     manager = MemoryManager(
         backend=InMemoryBackend(),
@@ -158,47 +145,38 @@ async def test_graph_query_api():
     )
     await manager.initialize()
 
-    # 两轮对话积累图谱
     for content in [
         "我叫张伟，是清华大学的 NLP 研究员，研究大语言模型对齐问题。",
-        "我们团队在开发一个基于 RLHF 的对齐框架，和 Anthropic 的方向类似。",
+        "我们团队在开发基于 RLHF 的对齐框架，和 Anthropic 的方向类似。",
     ]:
         await manager.add(
             messages=[Message(role=Role.USER, content=content)],
             session_id="s-query",
         )
 
-    # 查询邻居
     result = await manager.query_graph("张伟", session_id="s-query", hops=1)
-    print(f"    '张伟' 的邻居节点 ({len(result.neighbours)} 个):")
+    print(f"    '张伟' 的邻居 ({len(result.neighbours)} 个):")
     for n in result.neighbours:
         target = n["entity"].name if n["entity"] else "?"
-        print(f"      → {n['relation']} → {target} (confidence={n['confidence']:.2f})")
+        print(f"      → {n['relation']} → {target} (conf={n['confidence']:.2f})")
 
-    # 获取单个实体
     entity = await manager.get_entity("张伟", session_id="s-query")
     if entity:
         print(f"    实体详情: {entity.name} [{entity.entity_type}] attrs={entity.attributes}")
     else:
-        print("    '张伟' 实体未提取到（小模型输出不稳定，属正常现象）")
+        print("    '张伟' 未提取到实体")
 
-    # 列出所有 person 类型实体
     persons = await manager.list_entities("s-query", entity_type="person")
-    print(f"    Person 类型实体: {[e.name for e in persons]}")
-
+    print(f"    Person 实体列表: {[e.name for e in persons]}")
     await manager.close()
     print("    OK")
 
 
 async def test_graph_persistence():
-    """6. v1.5 GraphStore SQLite 持久化：保存 → 重启 → 恢复"""
-    print("\n[6] Graph SQLite 持久化（v1.5）")
-
+    print("\n[6] GraphStore SQLite 持久化（v1.5）")
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
-
     try:
-        # 第一个 manager：写入图谱
         m1 = MemoryManager(
             backend=InMemoryBackend(),
             strategy=AtomicFactsStrategy(),
@@ -209,13 +187,12 @@ async def test_graph_persistence():
         )
         await m1.initialize()
         result = await m1.add(
-            messages=[Message(role=Role.USER, content="我叫陈静，是北京大学的计算机博士生。")],
+            messages=[Message(role=Role.USER, content="我叫陈静，是北京大学的计算机博士生，研究知识图谱。")],
             session_id="s-persist",
         )
         print(f"    写入图谱：{result.entities_extracted} 实体")
         await m1.close()
 
-        # 第二个 manager：从 SQLite 恢复
         m2 = MemoryManager(
             backend=InMemoryBackend(),
             strategy=AtomicFactsStrategy(),
@@ -225,17 +202,14 @@ async def test_graph_persistence():
             graph_db_path=db_path,
         )
         await m2.initialize()
-        # 首次访问触发 SQLite 恢复
         entity = await m2.get_entity("陈静", session_id="s-persist")
         if entity:
-            print(f"    SQLite 恢复成功：找到实体 '{entity.name}' [{entity.entity_type}]")
+            print(f"    SQLite 恢复成功：'{entity.name}' [{entity.entity_type}]")
         else:
-            print("    实体未找到（小模型未能提取，属正常现象）")
+            print("    实体未从 SQLite 恢复（图谱提取为空时属正常）")
         await m2.close()
-
     finally:
         Path(db_path).unlink(missing_ok=True)
-
     print("    OK")
 
 
@@ -243,8 +217,8 @@ async def test_graph_persistence():
 
 async def main():
     print("=" * 60)
-    print(" AgentMemoryManager v1.5 — Ollama 集成测试")
-    print(f" LLM: {LLM_MODEL}  |  Embedder: {EMBED_MODEL}")
+    print(" AgentMemoryManager v1.5 — 豆包 API 集成测试")
+    print(f" LLM: {DOUBAO_MODEL}  |  Embedder: {EMBED_MODEL}(local)")
     print("=" * 60)
 
     tests = [
@@ -262,7 +236,9 @@ async def main():
             await t()
             passed += 1
         except Exception as e:
+            import traceback
             print(f"    FAILED: {e}")
+            traceback.print_exc()
             failed += 1
 
     print("\n" + "=" * 60)

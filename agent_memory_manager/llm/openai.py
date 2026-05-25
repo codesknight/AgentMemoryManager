@@ -22,13 +22,15 @@ class OpenAIClient(LLMClient):
         max_retries: int = 10,
         timeout: float = 120.0,
         keep_alive: Optional[int] = None,
+        trust_env: bool = False,
     ) -> None:
         self.model = model
         # keep_alive controls how long Ollama keeps the model in VRAM after a call.
         # Set to 0 to release immediately (recommended when sharing GPU with an embedder).
         self._keep_alive = keep_alive
-        # trust_env=False bypasses system/WinINet proxy for local endpoints
-        http_client = httpx.AsyncClient(trust_env=False, timeout=timeout)
+        # trust_env=False bypasses system/WinINet proxy — correct for local Ollama.
+        # Set trust_env=True for external APIs (OpenAI, Doubao, etc.) that need system proxy.
+        http_client = httpx.AsyncClient(trust_env=trust_env, timeout=timeout)
         self._client = AsyncOpenAI(
             api_key=api_key or "ollama",
             base_url=base_url,

@@ -16,7 +16,7 @@ AgentMemoryManager provides a **four-layer cognitive memory architecture** inspi
 ```
 Working Memory    → Active context window management (compression, sliding window)
 Episodic Memory   → Persistent atomic facts extracted from conversations
-Semantic Memory   → Entity-relationship knowledge graph
+Semantic Memory   → Entity-relationship knowledge graph (v1.5)
 Procedural Memory → Reusable task templates and tool-use patterns
 ```
 
@@ -109,9 +109,52 @@ async def main():
 asyncio.run(main())
 ```
 
-> **Windows + system proxy note**: `OpenAIClient` and `OllamaEmbedder` both set
-> `trust_env=False` on their internal HTTP clients, which bypasses Clash / V2Ray /
-> WinINet proxy settings so that local Ollama requests are not routed through a proxy.
+> **Windows + system proxy note**: `OpenAIClient` and `OllamaEmbedder` default to
+> `trust_env=False`, bypassing Clash / V2Ray / WinINet proxy so that local Ollama
+> calls are not intercepted. For **external APIs** (OpenAI, Doubao, etc.) that need
+> the system proxy, pass `trust_env=True`:
+> ```python
+> OpenAIClient(model="...", api_key="...", base_url="...", trust_env=True)
+> ```
+
+## Graph Memory (v1.5)
+
+Automatically extract entities and relations from every conversation turn and query the resulting knowledge graph.
+
+```python
+manager = MemoryManager(
+    backend=SQLiteBackend("memory.db"),
+    strategy=AtomicFactsStrategy(),
+    llm=OpenAIClient(model="claude-sonnet-4-6"),
+    embedder=LocalEmbedder(),
+    enable_graph=True,          # auto-extract on every add()
+    graph_db_path="graph.db",   # persist graph to SQLite (optional)
+)
+await manager.initialize()
+
+# Entities and relations are extracted automatically during add()
+result = await manager.add(
+    messages=[Message(role=Role.USER, content="I'm Sam, ML engineer at DataCo.")],
+    session_id="user-123",
+)
+print(f"Extracted {result.entities_extracted} entities, {result.relations_extracted} relations")
+
+# Query the knowledge graph
+graph = await manager.query_graph("Sam", session_id="user-123", hops=1)
+for n in graph.neighbours:
+    print(f"  Sam --[{n['relation']}]--> {n['entity'].name}")
+
+# Fetch a single entity with its attributes
+entity = await manager.get_entity("Sam", session_id="user-123")
+print(entity.attributes)   # {'role': 'ML engineer'}
+
+# List entities by type
+persons = await manager.list_entities("user-123", entity_type="person")
+
+# Graph counts appear in get_stats()
+stats = await manager.get_stats("user-123")
+print(stats.graph_entity_count, stats.graph_relation_count)
+```
 
 ## Architecture
 
@@ -124,6 +167,7 @@ asyncio.run(main())
 ┌────────────────────▼────────────────────────┐
 │           AgentMemoryManager Core            │
 │  MemoryManager → StrategyEngine → Layers    │
+│  GraphExtractor → SemanticMemory (v1.5)     │
 └────────────────────┬────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────┐
@@ -136,9 +180,10 @@ asyncio.run(main())
 
 - **Pluggable strategies**: Sliding window, summarization, atomic fact extraction, reflection, Zettelkasten
 - **Multiple backends**: In-memory, SQLite, Chroma, Qdrant, PostgreSQL+pgvector
-- **Multi-provider LLM support**: Anthropic Claude, OpenAI, Ollama (local), LiteLLM
+- **Graph Memory** (v1.5): Automatic entity/relation extraction, multi-hop graph queries, SQLite persistence
+- **Multi-provider LLM support**: Anthropic Claude, OpenAI, Ollama (local), any OpenAI-compatible API
 - **Framework integrations**: LangChain, LlamaIndex
-- **Production-ready**: Structured logging, Prometheus metrics, GDPR-compliant deletion
+- **Production-ready**: GDPR-compliant deletion, 118 unit tests, 86% coverage
 
 ## Benchmarks
 
@@ -155,15 +200,17 @@ Built on top of frontier research (2023–2025):
 - **Mem0** (arXiv:2504.19413) — atomic fact extraction pipeline
 - **Generative Agents** (Park et al., UIST 2023) — reflection mechanism
 - **A-MEM** (arXiv:2502.12110, NeurIPS 2025) — Zettelkasten dynamic linking
+- **Zep/Graphiti** (arXiv:2501.13956) — temporal knowledge graph design
 - **StreamingLLM** (ICLR 2024) — attention sink management
 - **LLMLingua** (EMNLP 2023) — token-level compression
 
 ## Roadmap
 
 - [x] v0.1 — Technical research & design documents
-- [x] v1.0 — Core memory layers, all backends, LangChain/LlamaIndex, Ollama support
-- [ ] v1.5 — Neo4j backend, automatic entity extraction, knowledge graph queries
-- [ ] v2.0 — PGVector, streaming compression, multi-modal memory
+- [x] v1.0 — Core strategies (SlidingWindow / Summarize / AtomicFacts / Reflection / Zettelkasten), all backends, LangChain/LlamaIndex, CI
+- [x] v1.0.1 — Robust JSON parsing, prompt optimization, OllamaEmbedder, `trust_env` for external APIs
+- [x] v1.5 — Graph Memory: `GraphExtractor`, `GraphStore` (SQLite), `query_graph` / `get_entity` / `list_entities` API
+- [ ] v2.0 — Cross-session user memory, REST API server, pgvector backend, streaming compression
 
 ## License
 
