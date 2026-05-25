@@ -13,6 +13,8 @@ class AddResult:
     deleted: list[str] = field(default_factory=list)  # deleted memory IDs
     compressed: bool = False
     reflected: bool = False
+    entities_extracted: int = 0   # entities added/updated in knowledge graph
+    relations_extracted: int = 0  # relations added to knowledge graph
 
     @property
     def total_changes(self) -> int:
@@ -50,6 +52,15 @@ class CompressionResult:
 
 
 @dataclass
+class GraphQueryResult:
+    """Result of a knowledge-graph neighbourhood query."""
+    entity_name: str = ""
+    neighbours: list[dict] = field(default_factory=list)  # {entity, relation, confidence, distance}
+    total_entities: int = 0
+    total_relations: int = 0
+
+
+@dataclass
 class MemoryStats:
     session_id: str = ""
     total_memories: int = 0
@@ -60,3 +71,5 @@ class MemoryStats:
     estimated_tokens: int = 0
     oldest_memory_age_hours: Optional[float] = None
     avg_importance_score: float = 0.0
+    graph_entity_count: int = 0
+    graph_relation_count: int = 0

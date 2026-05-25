@@ -234,3 +234,158 @@ async def test_close_does_not_raise():
     manager = _make_manager()
     await manager.initialize()
     await manager.close()  # Should not raise
+
+
+# ── Graph tests (v1.5) ──────────────────────────────────────────────────────
+
+import json
+
+def _make_manager_with_graph_llm(entities=None, relations=None) -> MemoryManager:
+    """Manager whose LLM returns a structured entity extraction response."""
+    llm = AsyncMock()
+    llm.generate = AsyncMock(return_value=json.dumps({
+        "entities": entities or [],
+        "relations": relations or [],
+    }))
+    return MemoryManager(
+        backend=InMemoryBackend(),
+        strategy=SlidingWindowStrategy(window_size=10),
+        llm=llm,
+        embedder=_mock_embedder(),
+        enable_graph=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_populates_graph():
+    manager = _make_manager_with_graph_llm(
+        entities=[{"name": "Sam", "type": "person", "attributes": {"role": "ML engineer"}}],
+        relations=[],
+    )
+    await manager.initialize()
+
+    result = await manager.add(
+        messages=[Message(role=Role.USER, content="Hi I'm Sam, an ML engineer.")],
+        session_id="s1",
+    )
+    assert result.entities_extracted == 1
+    assert result.relations_extracted == 0
+
+
+@pytest.mark.asyncio
+async def test_query_graph_returns_neighbours():
+    manager = _make_manager_with_graph_llm(
+        entities=[
+            {"name": "Sam", "type": "person", "attributes": {}},
+            {"name": "DataCo", "type": "organization", "attributes": {}},
+        ],
+        relations=[{"subject": "Sam", "predicate": "works_at", "object": "DataCo", "confidence": 0.9}],
+    )
+    await manager.initialize()
+
+    await manager.add(
+        messages=[Message(role=Role.USER, content="Sam works at DataCo.")],
+        session_id="s1",
+    )
+    result = await manager.query_graph("Sam", session_id="s1", hops=1)
+    assert result.entity_name == "Sam"
+    assert len(result.neighbours) == 1
+    assert result.neighbours[0]["relation"] == "works_at"
+
+
+@pytest.mark.asyncio
+async def test_get_entity_returns_entity():
+    manager = _make_manager_with_graph_llm(
+        entities=[{"name": "Alice", "type": "person", "attributes": {"role": "engineer"}}],
+    )
+    await manager.initialize()
+    await manager.add(
+        messages=[Message(role=Role.USER, content="I am Alice.")],
+        session_id="s1",
+    )
+    entity = await manager.get_entity("Alice", session_id="s1")
+    assert entity is not None
+    assert entity.name == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_get_entity_unknown_returns_none():
+    manager = _make_manager()
+    await manager.initialize()
+    result = await manager.get_entity("Nobody", session_id="s1")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_query_graph_unknown_session_returns_empty():
+    manager = _make_manager()
+    await manager.initialize()
+    result = await manager.query_graph("Alice", session_id="no-such-session")
+    assert result.neighbours == []
+
+
+@pytest.mark.asyncio
+async def test_list_entities():
+    manager = _make_manager_with_graph_llm(
+        entities=[
+            {"name": "Alice", "type": "person", "attributes": {}},
+            {"name": "DataCo", "type": "organization", "attributes": {}},
+        ],
+    )
+    await manager.initialize()
+    await manager.add(
+        messages=[Message(role=Role.USER, content="Alice works at DataCo.")],
+        session_id="s1",
+    )
+    persons = await manager.list_entities("s1", entity_type="person")
+    assert len(persons) == 1
+    assert persons[0].name == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_stats_include_graph_counts():
+    manager = _make_manager_with_graph_llm(
+        entities=[{"name": "Bob", "type": "person", "attributes": {}}],
+    )
+    await manager.initialize()
+    await manager.add(
+        messages=[Message(role=Role.USER, content="I am Bob.")],
+        session_id="s1",
+    )
+    stats = await manager.get_stats("s1")
+    assert stats.graph_entity_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_session_clears_graph():
+    manager = _make_manager_with_graph_llm(
+        entities=[{"name": "Alice", "type": "person", "attributes": {}}],
+    )
+    await manager.initialize()
+    await manager.add(
+        messages=[Message(role=Role.USER, content="I am Alice.")],
+        session_id="s1",
+    )
+    await manager.delete_session("s1")
+    result = await manager.query_graph("Alice", session_id="s1")
+    assert result.neighbours == []
+
+
+@pytest.mark.asyncio
+async def test_enable_graph_false_skips_extraction():
+    llm = AsyncMock()
+    llm.generate = AsyncMock(return_value="[]")
+    manager = MemoryManager(
+        backend=InMemoryBackend(),
+        strategy=SlidingWindowStrategy(window_size=10),
+        llm=llm,
+        embedder=_mock_embedder(),
+        enable_graph=False,
+    )
+    await manager.initialize()
+    result = await manager.add(
+        messages=[Message(role=Role.USER, content="I am Alice.")],
+        session_id="s1",
+    )
+    assert result.entities_extracted == 0
+    assert result.relations_extracted == 0

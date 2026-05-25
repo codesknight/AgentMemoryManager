@@ -2,6 +2,34 @@
 
 All notable changes to AgentMemoryManager are documented here.
 
+## [1.5.0] — 2026-05-25
+
+### Added
+
+**Graph Memory (Knowledge Graph Integration)**
+- `GraphExtractor` — LLM-driven entity and relation extraction from conversation turns;
+  merges into per-session `SemanticMemory`; deduplicates entities (attribute merge) and
+  relations (skips exact duplicates); graceful fallback on LLM failure
+- `GraphStore` — async SQLite persistence for knowledge graphs; save/load/delete per
+  session; `MemoryManager` auto-restores graph on first access when `graph_db_path` set
+- `MemoryManager.query_graph(entity, session_id, hops)` — multi-hop neighbourhood query
+- `MemoryManager.get_entity(name, session_id)` — fetch single entity details
+- `MemoryManager.list_entities(session_id, entity_type)` — list entities with optional type filter
+- `enable_graph` flag on `MemoryManager` (default `True`) to opt out of graph extraction
+- `graph_db_path` param on `MemoryManager` to enable SQLite graph persistence
+- `AddResult.entities_extracted` / `relations_extracted` — graph extraction counts
+- `MemoryStats.graph_entity_count` / `graph_relation_count` — graph stats in `get_stats()`
+- `GraphQueryResult` dataclass for structured query responses
+- `delete_session()` now also clears the in-process graph and SQLite graph store
+
+**Tests**
+- `test_graph_extractor.py` — 7 tests covering extraction, dedup, merge, failure paths
+- `test_graph_store.py` — 7 tests covering save/load/delete/overwrite/list
+- `test_manager.py` — +10 graph integration tests
+- Total: 118 unit tests (+22), core coverage 86%
+
+---
+
 ## [1.0.0] — 2026-05-25
 
 ### Added

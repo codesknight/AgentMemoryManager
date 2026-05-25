@@ -8,8 +8,15 @@ from .backends.base import MemoryBackend
 from .config import MemoryConfig
 from .embedders.base import Embedder
 from .llm.base import LLMClient
+from .memory.graph_extractor import GraphExtractor
+from .memory.graph_store import GraphStore
+from .memory.semantic_memory import SemanticMemory
 from .models import Message, MemoryRecord, MemoryStats, MemoryType
-from .models.results import AddResult, CompressionResult, ContextResult, SearchResult
+from .models.entity import Entity
+from .models.results import (
+    AddResult, CompressionResult, ContextResult,
+    GraphQueryResult, SearchResult,
+)
 from .strategies.base import MemoryStrategy
 from .utils.prompts import MEMORY_INJECTION_TEMPLATE
 from .utils.scoring import compute_retrieval_score
@@ -22,7 +29,8 @@ class MemoryManager:
     """Main entry point for AgentMemoryManager.
 
     Manages the full memory lifecycle: ingestion, storage, retrieval,
-    compression, and context injection. All I/O is async.
+    compression, context injection, and knowledge-graph extraction.
+    All I/O is async.
 
     Typical usage::
 
@@ -31,6 +39,10 @@ class MemoryManager:
 
         await manager.add(messages=[...], session_id="user-123")
         prompt = await manager.build_prompt("What was my project?", "user-123")
+
+        # v1.5: knowledge graph
+        result = await manager.query_graph("Sam", session_id="user-123")
+        entity  = await manager.get_entity("Sam", session_id="user-123")
     """
 
     def __init__(
@@ -40,12 +52,23 @@ class MemoryManager:
         llm: LLMClient,
         embedder: Embedder,
         config: Optional[MemoryConfig] = None,
+        enable_graph: bool = True,
+        graph_db_path: Optional[str] = None,
     ) -> None:
         self._backend = backend
         self._strategy = strategy
         self._llm = llm
         self._embedder = embedder
         self._config = config or MemoryConfig()
+        self._enable_graph = enable_graph
+
+        # Per-session knowledge graphs (in-process cache)
+        self._graphs: dict[str, SemanticMemory] = {}
+        self._extractor = GraphExtractor()
+        # Optional SQLite persistence for graphs
+        self._graph_store: Optional[GraphStore] = (
+            GraphStore(graph_db_path) if graph_db_path else None
+        )
 
         if self._config.enable_logging:
             logging.basicConfig(level=self._config.log_level)
@@ -53,13 +76,17 @@ class MemoryManager:
     # ────────── Lifecycle ──────────
 
     async def initialize(self) -> None:
-        """Initialize storage backend (create tables, connect, etc.)."""
+        """Initialize storage backend and optional graph store."""
         await self._backend.initialize()
+        if self._graph_store:
+            await self._graph_store.initialize()
         logger.debug("MemoryManager initialized with backend=%s", type(self._backend).__name__)
 
     async def close(self) -> None:
         """Release all resources."""
         await self._backend.close()
+        if self._graph_store:
+            await self._graph_store.close()
 
     # ────────── Factory ──────────
 
@@ -81,7 +108,11 @@ class MemoryManager:
         user_id: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> AddResult:
-        """Process new conversation messages and update memory."""
+        """Process new conversation messages and update memory.
+
+        When ``enable_graph=True`` (default), also runs LLM entity extraction
+        and populates the session knowledge graph.
+        """
         if not messages:
             return AddResult()
 
@@ -101,12 +132,21 @@ class MemoryManager:
             llm=self._llm,
         )
 
+        # ── Knowledge-graph extraction ──
+        entities_n = relations_n = 0
+        if self._enable_graph:
+            graph = await self._get_or_create_graph(session_id)
+            entities_n, relations_n = await self._extractor.extract(
+                messages, session_id, graph, self._llm
+            )
+            if self._graph_store and (entities_n or relations_n):
+                await self._graph_store.save(graph)
+
         logger.info(
-            "add session=%s added=%d updated=%d deleted=%d",
+            "add session=%s added=%d updated=%d deleted=%d entities=%d relations=%d",
             session_id,
-            len(result.added),
-            len(result.updated),
-            len(result.deleted),
+            len(result.added), len(result.updated), len(result.deleted),
+            entities_n, relations_n,
         )
         return AddResult(
             added=result.added,
@@ -114,6 +154,8 @@ class MemoryManager:
             deleted=result.deleted,
             compressed=result.compressed,
             reflected=result.reflected,
+            entities_extracted=entities_n,
+            relations_extracted=relations_n,
         )
 
     # ────────── Retrieve ──────────
@@ -130,7 +172,6 @@ class MemoryManager:
         query_embedding = await self._embedder.embed(query)
 
         filters: dict = {"session_id": session_id}
-        # Note: multi-type filter is done in Python for simplicity
         candidates = await self._backend.search_by_vector(
             query_embedding, top_k=k * 3, filters=filters
         )
@@ -143,10 +184,8 @@ class MemoryManager:
             for r in candidates
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
-
         top = scored[:k]
 
-        # Update accessed_at for retrieved records
         now = datetime.now(timezone.utc)
         for record, _ in top:
             await self._backend.update(record.id, {"accessed_at": now})
@@ -191,23 +230,74 @@ class MemoryManager:
             base_prompt=base_prompt,
         )
 
+    # ────────── Graph ──────────
+
+    async def query_graph(
+        self,
+        entity_name: str,
+        session_id: str,
+        hops: int = 1,
+        current_only: bool = True,
+    ) -> GraphQueryResult:
+        """Query the knowledge graph for an entity's neighbourhood.
+
+        Args:
+            entity_name: Name of the entity to query (case-insensitive).
+            session_id:  Session whose graph to search.
+            hops:        How many relation-hops to traverse (default 1).
+            current_only: If True, skip expired relations.
+
+        Returns:
+            GraphQueryResult with neighbours list and graph stats.
+        """
+        graph = self._graphs.get(session_id)
+        if graph is None:
+            return GraphQueryResult(entity_name=entity_name)
+
+        neighbours = graph.get_neighbours(entity_name, hops=hops, current_only=current_only)
+        return GraphQueryResult(
+            entity_name=entity_name,
+            neighbours=neighbours,
+            total_entities=graph.entity_count,
+            total_relations=graph.relation_count,
+        )
+
+    async def get_entity(
+        self,
+        entity_name: str,
+        session_id: str,
+    ) -> Optional[Entity]:
+        """Retrieve a single entity from the session knowledge graph."""
+        graph = self._graphs.get(session_id)
+        if graph is None:
+            return None
+        return graph.get_entity(entity_name)
+
+    async def list_entities(
+        self,
+        session_id: str,
+        entity_type: Optional[str] = None,
+    ) -> list[Entity]:
+        """List all entities in the session knowledge graph, optionally filtered by type."""
+        graph = self._graphs.get(session_id)
+        if graph is None:
+            return []
+        return graph.search_entities(entity_type=entity_type)
+
     # ────────── Manage ──────────
 
     async def compress(self, session_id: str) -> CompressionResult:
         """Manually trigger memory compression for a session."""
-        before = await self._backend.count(session_id)
         records = await self._backend.list_by_session(session_id, limit=10_000)
         before_tokens = sum(r.token_estimate() for r in records)
 
-        # Re-run strategy's process with empty messages to trigger compression
         from .strategies.summarize import SummarizeStrategy
         compressor = SummarizeStrategy(
-            summarize_threshold=0,  # Force compression
+            summarize_threshold=0,
             preserve_recent=self._config.preserve_recent_turns,
         )
         result = await compressor.process([], session_id, self._backend, self._embedder, self._llm)
 
-        after = await self._backend.count(session_id)
         records_after = await self._backend.list_by_session(session_id, limit=10_000)
         after_tokens = sum(r.token_estimate() for r in records_after)
 
@@ -219,16 +309,25 @@ class MemoryManager:
         )
 
     async def delete_session(self, session_id: str) -> int:
-        """Delete all memories for a session (GDPR right-to-be-forgotten)."""
+        """Delete all memories and graph data for a session (GDPR)."""
         count = await self._backend.delete_by_session(session_id)
+        self._graphs.pop(session_id, None)
+        if self._graph_store:
+            await self._graph_store.delete(session_id)
         logger.info("Deleted %d memories for session=%s", count, session_id)
         return count
 
     async def get_stats(self, session_id: str) -> MemoryStats:
         """Return memory statistics for a session."""
         records = await self._backend.list_by_session(session_id, limit=10_000)
+        graph = self._graphs.get(session_id)
+
         if not records:
-            return MemoryStats(session_id=session_id)
+            return MemoryStats(
+                session_id=session_id,
+                graph_entity_count=graph.entity_count if graph else 0,
+                graph_relation_count=graph.relation_count if graph else 0,
+            )
 
         now = datetime.now(timezone.utc)
         oldest_hours = max(
@@ -250,7 +349,22 @@ class MemoryManager:
             estimated_tokens=sum(r.token_estimate() for r in records),
             oldest_memory_age_hours=oldest_hours,
             avg_importance_score=avg_importance,
+            graph_entity_count=graph.entity_count if graph else 0,
+            graph_relation_count=graph.relation_count if graph else 0,
         )
+
+    # ────────── Internal ──────────
+
+    async def _get_or_create_graph(self, session_id: str) -> SemanticMemory:
+        if session_id not in self._graphs:
+            # Try to restore from SQLite first
+            if self._graph_store:
+                loaded = await self._graph_store.load(session_id)
+                if loaded:
+                    self._graphs[session_id] = loaded
+                    return loaded
+            self._graphs[session_id] = SemanticMemory(session_id)
+        return self._graphs[session_id]
 
 
 # ────────── Factory helpers ──────────

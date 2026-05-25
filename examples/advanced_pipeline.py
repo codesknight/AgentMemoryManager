@@ -1,9 +1,9 @@
-"""Advanced Pipeline Example — Zettelkasten + Reflection + Semantic Memory.
+"""Advanced Pipeline Example — Zettelkasten + Reflection + Graph Memory (v1.5).
 
 Demonstrates a production-style setup combining:
   1. ZettelkastenStrategy — structured note creation with auto-linking
   2. ReflectionStrategy   — periodic synthesis of high-level insights
-  3. SemanticMemory        — entity-relation knowledge graph
+  3. Graph Memory (v1.5)  — automatic entity/relation extraction via MemoryManager
 
 Run:
     python examples/advanced_pipeline.py
@@ -11,12 +11,9 @@ Run:
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
 
 from agent_memory_manager import MemoryManager, Message, Role
 from agent_memory_manager.backends import InMemoryBackend
-from agent_memory_manager.memory import SemanticMemory
-from agent_memory_manager.models.entity import Entity, Relation
 from agent_memory_manager.strategies import (
     ReflectionStrategy,
     StrategyPipeline,
@@ -45,6 +42,19 @@ class MockLLM:
 
     async def generate(self, prompt: str, **kwargs) -> str:
         self._call_count += 1
+        # Graph entity/relation extraction — detected by prompt header line
+        if "Extract named entities and their relationships" in prompt:
+            return json.dumps({
+                "entities": [
+                    {"name": "Sam", "type": "person", "attributes": {"role": "ML engineer"}},
+                    {"name": "DataCo", "type": "organization", "attributes": {}},
+                    {"name": "RAG Pipeline", "type": "project", "attributes": {"stack": "Python"}},
+                ],
+                "relations": [
+                    {"subject": "Sam", "predicate": "works_at", "object": "DataCo", "confidence": 0.95},
+                    {"subject": "Sam", "predicate": "builds", "object": "RAG Pipeline", "confidence": 0.9},
+                ],
+            })
         # Zettelkasten note creation
         if "Zettelkasten" in prompt or "structured note" in prompt.lower():
             return json.dumps({
@@ -69,14 +79,14 @@ class MockLLM:
 
 
 async def main():
-    print("=== Advanced Pipeline: Zettelkasten + Reflection + SemanticMemory ===\n")
+    print("=== Advanced Pipeline: Zettelkasten + Reflection + Graph Memory (v1.5) ===\n")
 
     session_id = "adv-demo-001"
 
     # ── 1. Build the strategy pipeline ──────────────────────────────────────
     pipeline = StrategyPipeline([
         ZettelkastenStrategy(link_threshold=0.6, max_links_per_note=3),
-        ReflectionStrategy(reflection_threshold=5.0, max_insights=3),  # low threshold for demo
+        ReflectionStrategy(reflection_threshold=5.0, max_insights=3),
     ])
 
     manager = MemoryManager(
@@ -84,6 +94,7 @@ async def main():
         strategy=pipeline,
         llm=MockLLM(),
         embedder=MockEmbedder(),
+        enable_graph=True,   # v1.5: automatic graph extraction on every add()
     )
     await manager.initialize()
 
@@ -106,9 +117,33 @@ async def main():
     print("Feeding conversation turns...")
     for i, turn in enumerate(conversations):
         result = await manager.add(messages=turn, session_id=session_id)
-        print(f"  Turn {i+1}: +{len(result.added)} added  reflected={result.reflected}")
+        print(
+            f"  Turn {i+1}: +{len(result.added)} added  "
+            f"reflected={result.reflected}  "
+            f"entities={result.entities_extracted}  "
+            f"relations={result.relations_extracted}"
+        )
 
-    # ── 3. Retrieve memory-enhanced context ─────────────────────────────────
+    # ── 3. Graph API (v1.5) ──────────────────────────────────────────────────
+    print("\n── Graph Memory (v1.5) ──")
+
+    # Query neighbourhood of an entity
+    graph_result = await manager.query_graph("Sam", session_id=session_id, hops=1)
+    print(f"  Sam's neighbours ({len(graph_result.neighbours)}):")
+    for n in graph_result.neighbours:
+        target = n["entity"].name if n["entity"] else "?"
+        print(f"    → {n['relation']} → {target} (confidence={n['confidence']:.2f})")
+
+    # Fetch a single entity
+    sam_entity = await manager.get_entity("Sam", session_id=session_id)
+    if sam_entity:
+        print(f"\n  Entity 'Sam': type={sam_entity.entity_type}, attrs={sam_entity.attributes}")
+
+    # List all persons
+    persons = await manager.list_entities(session_id, entity_type="person")
+    print(f"\n  Persons in graph: {[e.name for e in persons]}")
+
+    # ── 4. Memory-enhanced prompt ────────────────────────────────────────────
     print("\nBuilding memory-enhanced prompt...")
     prompt = await manager.build_prompt(
         "What ML projects is this user working on?",
@@ -117,46 +152,16 @@ async def main():
     )
     print(prompt)
 
-    # ── 4. Print stats ───────────────────────────────────────────────────────
+    # ── 5. Stats (include graph counts) ─────────────────────────────────────
     stats = await manager.get_stats(session_id)
     print(f"\nMemory stats:")
-    print(f"  Total records : {stats.total_memories}")
-    print(f"  Episodic      : {stats.episodic_count}")
-    print(f"  Reflections   : {stats.reflection_count}")
-    print(f"  Est. tokens   : {stats.estimated_tokens}")
+    print(f"  Total records   : {stats.total_memories}")
+    print(f"  Episodic        : {stats.episodic_count}")
+    print(f"  Reflections     : {stats.reflection_count}")
+    print(f"  Graph entities  : {stats.graph_entity_count}")
+    print(f"  Graph relations : {stats.graph_relation_count}")
+    print(f"  Est. tokens     : {stats.estimated_tokens}")
 
-    # ── 5. Demonstrate SemanticMemory (standalone) ───────────────────────────
-    print("\n── SemanticMemory (Knowledge Graph) ──")
-    sm = SemanticMemory(session_id)
-
-    sam = Entity(session_id=session_id, name="Sam", entity_type="person",
-                 attributes={"role": "ML engineer"})
-    dataco = Entity(session_id=session_id, name="DataCo", entity_type="organization")
-    rag_project = Entity(session_id=session_id, name="RAG Pipeline", entity_type="project")
-
-    sm.add_entity(sam)
-    sm.add_entity(dataco)
-    sm.add_entity(rag_project)
-
-    sm.add_relation(Relation(
-        session_id=session_id, subject_id="Sam",
-        predicate="works_at", object_id="DataCo"
-    ))
-    sm.add_relation(Relation(
-        session_id=session_id, subject_id="Sam",
-        predicate="builds", object_id="RAG Pipeline"
-    ))
-
-    neighbours = sm.get_neighbours("Sam", hops=1)
-    print(f"  Sam's direct connections:")
-    for n in neighbours:
-        entity_name = n["entity"].name if n["entity"] else "?"
-        print(f"    → {n['relation']} → {entity_name} (confidence={n['confidence']:.2f})")
-
-    two_hop = sm.get_neighbours("Sam", hops=2)
-    print(f"  2-hop reachable entities: {[n['entity'].name for n in two_hop if n['entity']]}")
-
-    print(f"\n  Graph: {sm.entity_count} entities, {sm.relation_count} relations")
     print("\nDone.")
 
 
