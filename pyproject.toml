@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-memory-manager"
-version = "1.5.0"
+version = "2.0.0"
 description = "Pluggable memory management for LLM agents — solving context degradation in long conversations"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -39,8 +39,9 @@ langchain = ["langchain>=0.3.0", "langchain-core>=0.3.0"]
 llamaindex = ["llama-index>=0.11.0"]
 local = ["sentence-transformers>=3.0.0"]
 ollama = ["httpx>=0.27.0"]
+server = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 all = [
-    "agent-memory-manager[chroma,qdrant,pgvector,neo4j,langchain,llamaindex,local,ollama]",
+    "agent-memory-manager[chroma,qdrant,pgvector,neo4j,langchain,llamaindex,local,ollama,server]",
 ]
 dev = [
     "pytest>=8.0.0",

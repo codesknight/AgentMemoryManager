@@ -2,6 +2,7 @@ from .message import Message, Role
 from .memory_record import MemoryRecord, MemoryType
 from .entity import Entity, Relation
 from .results import AddResult, SearchResult, ContextResult, CompressionResult, MemoryStats
+from .user_profile import UserProfile
 
 __all__ = [
     "Message",
@@ -15,4 +16,5 @@ __all__ = [
     "ContextResult",
     "CompressionResult",
     "MemoryStats",
+    "UserProfile",
 ]

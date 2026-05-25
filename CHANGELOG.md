@@ -2,6 +2,64 @@
 
 All notable changes to AgentMemoryManager are documented here.
 
+## [2.0.0] — 2026-05-25
+
+### Added
+
+**A — Cross-Session User Memory**
+- `UserProfile` dataclass — aggregates facts, preferences, session IDs, and raw summary per user
+- `UserProfileStore` — async SQLite persistence (`user_profiles` table); `save`, `load`, `delete`, `list_users`
+- `MemoryManager.build_user_profile(user_id, force_rebuild)` — LLM-synthesized profile from all sessions
+- `MemoryManager.get_user_profile(user_id)` — retrieve cached profile
+- `MemoryManager.search_cross_session(user_id, query, top_k)` — semantic search across all user sessions
+- `MemoryManager.delete_user(user_id)` — purge all memories, graph, and profile for a user
+- `user_profile_db_path` constructor param on `MemoryManager`
+- `USER_PROFILE_SYNTHESIS_PROMPT` — structured prompt for profile synthesis
+- `list_by_user` / `delete_by_user` on `InMemoryBackend`, `SQLiteBackend`, and `PgVectorBackend`
+- `user_id` filter support in `search_by_vector` for InMemory and SQLite backends
+
+**B — REST API Server**
+- `agent_memory_manager.server` package — production-ready FastAPI service
+- `create_app(manager)` factory with FastAPI lifespan (initialize/close MemoryManager)
+- Endpoints: `POST /sessions/{session_id}/memories`, `GET /sessions/{session_id}/memories`,
+  `POST /sessions/{session_id}/search`, `POST /sessions/{session_id}/prompt`,
+  `DELETE /sessions/{session_id}`, `POST /users/{user_id}/profile`,
+  `GET /users/{user_id}/profile`, `POST /users/{user_id}/search`,
+  `DELETE /users/{user_id}`, `GET /sessions/{session_id}/graph/{entity}`,
+  `GET /stats`
+- `server/schemas.py` — Pydantic v2 request/response models
+- `server/entrypoint.py` — env-var-based Docker entrypoint (`AMM_BACKEND`, `AMM_LLM_*`, etc.)
+- `Dockerfile` — `python:3.12-slim`, installs `.[all]` + `fastapi` + `uvicorn`
+- `docker-compose.yml` — single-service deployment on port 8000 with SQLite volumes
+- `server` extras: `pip install agent-memory-manager[server]` for FastAPI + Uvicorn
+
+**C — PgVector Backend + Streaming Compression**
+- `PgVectorBackend` — PostgreSQL + pgvector production backend
+  - IVFFlat ANN index (`embedding <=> $1::vector` cosine distance operator)
+  - asyncpg connection pool; `ON CONFLICT DO UPDATE` upsert
+  - `list_by_user` / `delete_by_user` with parameterized `$N` filters
+  - Falls back to in-process cosine re-ranking after ANN pre-fetch
+- `StreamingCompressStrategy` — incremental context compression
+  - Stores each incoming message immediately to keep context always ready
+  - When total tokens exceed `compress_threshold`, LLM-summarizes oldest messages
+  - Always preserves `preserve_recent` most-recent messages verbatim
+  - Graceful fallback if LLM unavailable (skips compression, keeps raw messages)
+  - `build_context` uses cosine-similarity ranking; falls back to recency if no embeddings
+
+**Package extras**
+- `pgvector = ["asyncpg>=0.29.0", "pgvector>=0.3.0"]` (already present, now documented)
+- `server = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]` (new)
+- `all` extra now includes `server`
+
+**Tests**
+- `test_user_profile.py` — 8 tests for UserProfile / UserProfileStore
+- `test_manager_user.py` — 10 tests for cross-session MemoryManager methods
+- `test_server.py` — 8 tests for REST API routes (ASGITransport)
+- `test_streaming.py` — 10 tests for StreamingCompressStrategy (mocked backend/LLM)
+- `test_pgvector.py` — 18 tests for PgVectorBackend (mocked asyncpg, no real DB)
+
+---
+
 ## [1.5.0] — 2026-05-25
 
 ### Added

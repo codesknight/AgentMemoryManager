@@ -54,6 +54,18 @@ class MemoryBackend(ABC):
     async def count(self, session_id: Optional[str] = None) -> int:
         ...
 
+    async def list_by_user(
+        self,
+        user_id: str,
+        limit: int = 10_000,
+    ) -> list[MemoryRecord]:
+        """Return all memories belonging to a user across all sessions."""
+        raise NotImplementedError
+
+    async def delete_by_user(self, user_id: str) -> int:
+        """Delete all memories for a user across all sessions. Returns count."""
+        raise NotImplementedError
+
     # Optional lifecycle hooks — backends may override
     async def initialize(self) -> None:
         """Called once before first use (e.g. create tables)."""

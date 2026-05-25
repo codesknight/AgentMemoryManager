@@ -11,14 +11,16 @@ from .llm.base import LLMClient
 from .memory.graph_extractor import GraphExtractor
 from .memory.graph_store import GraphStore
 from .memory.semantic_memory import SemanticMemory
+from .memory.user_profile_store import UserProfileStore
 from .models import Message, MemoryRecord, MemoryStats, MemoryType
 from .models.entity import Entity
 from .models.results import (
     AddResult, CompressionResult, ContextResult,
     GraphQueryResult, SearchResult,
 )
+from .models.user_profile import UserProfile
 from .strategies.base import MemoryStrategy
-from .utils.prompts import MEMORY_INJECTION_TEMPLATE
+from .utils.prompts import MEMORY_INJECTION_TEMPLATE, USER_PROFILE_SYNTHESIS_PROMPT
 from .utils.scoring import compute_retrieval_score
 from .utils.token_counter import count_tokens
 
@@ -54,6 +56,7 @@ class MemoryManager:
         config: Optional[MemoryConfig] = None,
         enable_graph: bool = True,
         graph_db_path: Optional[str] = None,
+        user_profile_db_path: Optional[str] = None,
     ) -> None:
         self._backend = backend
         self._strategy = strategy
@@ -65,10 +68,15 @@ class MemoryManager:
         # Per-session knowledge graphs (in-process cache)
         self._graphs: dict[str, SemanticMemory] = {}
         self._extractor = GraphExtractor()
-        # Optional SQLite persistence for graphs
         self._graph_store: Optional[GraphStore] = (
             GraphStore(graph_db_path) if graph_db_path else None
         )
+
+        # Cross-session user profiles
+        self._profile_store: Optional[UserProfileStore] = (
+            UserProfileStore(user_profile_db_path) if user_profile_db_path else None
+        )
+        self._user_profiles: dict[str, UserProfile] = {}
 
         if self._config.enable_logging:
             logging.basicConfig(level=self._config.log_level)
@@ -76,10 +84,12 @@ class MemoryManager:
     # ────────── Lifecycle ──────────
 
     async def initialize(self) -> None:
-        """Initialize storage backend and optional graph store."""
+        """Initialize storage backend, graph store, and user profile store."""
         await self._backend.initialize()
         if self._graph_store:
             await self._graph_store.initialize()
+        if self._profile_store:
+            await self._profile_store.initialize()
         logger.debug("MemoryManager initialized with backend=%s", type(self._backend).__name__)
 
     async def close(self) -> None:
@@ -87,6 +97,8 @@ class MemoryManager:
         await self._backend.close()
         if self._graph_store:
             await self._graph_store.close()
+        if self._profile_store:
+            await self._profile_store.close()
 
     # ────────── Factory ──────────
 
@@ -283,6 +295,118 @@ class MemoryManager:
         if graph is None:
             return []
         return graph.search_entities(entity_type=entity_type)
+
+    # ────────── User Memory (v2.0) ──────────
+
+    async def build_user_profile(
+        self,
+        user_id: str,
+        force_rebuild: bool = False,
+    ) -> UserProfile:
+        """Synthesize a UserProfile from all memories tagged with user_id.
+
+        The profile is cached in memory and optionally persisted to SQLite.
+        Pass ``force_rebuild=True`` to re-synthesize even if a cached version exists.
+
+        Returns:
+            UserProfile with deduplicated facts, preferences, and a raw summary.
+        """
+        if not force_rebuild:
+            if user_id in self._user_profiles:
+                return self._user_profiles[user_id]
+            if self._profile_store:
+                cached = await self._profile_store.load(user_id)
+                if cached:
+                    self._user_profiles[user_id] = cached
+                    return cached
+
+        records = await self._backend.list_by_user(user_id)
+        session_ids = list({r.session_id for r in records})
+        facts_text = "\n".join(f"- {r.content}" for r in records[:200])  # cap at 200
+
+        profile = UserProfile(
+            user_id=user_id,
+            session_ids=session_ids,
+            total_memories=len(records),
+        )
+
+        if records and facts_text:
+            try:
+                from .utils.json_utils import extract_json
+                raw = await self._llm.generate(
+                    USER_PROFILE_SYNTHESIS_PROMPT.format(facts=facts_text),
+                    max_tokens=512,
+                    temperature=0.0,
+                )
+                parsed = extract_json(raw)
+                if isinstance(parsed, dict):
+                    profile.facts = parsed.get("facts", [])
+                    profile.preferences = parsed.get("preferences", {})
+                    profile.raw_summary = parsed.get("raw_summary", "")
+            except Exception as exc:
+                logger.warning("UserProfile synthesis failed for %s: %s", user_id, exc)
+
+        self._user_profiles[user_id] = profile
+        if self._profile_store:
+            await self._profile_store.save(profile)
+
+        logger.info(
+            "Built user profile: user=%s sessions=%d memories=%d facts=%d",
+            user_id, len(session_ids), len(records), len(profile.facts),
+        )
+        return profile
+
+    async def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
+        """Return a cached or persisted user profile without rebuilding."""
+        if user_id in self._user_profiles:
+            return self._user_profiles[user_id]
+        if self._profile_store:
+            return await self._profile_store.load(user_id)
+        return None
+
+    async def search_cross_session(
+        self,
+        user_id: str,
+        query: str,
+        top_k: Optional[int] = None,
+    ) -> SearchResult:
+        """Semantic search across all sessions for a given user_id.
+
+        Unlike ``search()``, this is not scoped to a single session.
+        """
+        k = top_k or self._config.retrieval_top_k
+        query_embedding = await self._embedder.embed(query)
+
+        candidates = await self._backend.search_by_vector(
+            query_embedding,
+            top_k=k * 3,
+            filters={"user_id": user_id},
+        )
+
+        scored = [
+            (r, compute_retrieval_score(r, query_embedding, self._config.retrieval_weights))
+            for r in candidates
+        ]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top = scored[:k]
+
+        now = datetime.now(timezone.utc)
+        for record, _ in top:
+            await self._backend.update(record.id, {"accessed_at": now})
+
+        return SearchResult(
+            records=[r for r, _ in top],
+            scores=[s for _, s in top],
+        )
+
+    async def delete_user(self, user_id: str) -> int:
+        """Delete all memories and profile for a user (GDPR). Returns count deleted."""
+        count = await self._backend.delete_by_user(user_id)
+        self._user_profiles.pop(user_id, None)
+        if self._profile_store:
+            await self._profile_store.delete(user_id)
+        logger.info("Deleted %d memories for user=%s", count, user_id)
+        return count
 
     # ────────── Manage ──────────
 

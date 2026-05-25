@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_session ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_type    ON memories(memory_type);
+CREATE INDEX IF NOT EXISTS idx_user    ON memories(user_id);
 """
 
 
@@ -190,6 +191,20 @@ class SQLiteBackend(MemoryBackend):
         await self._conn().commit()
         return cursor.rowcount
 
+    async def list_by_user(self, user_id: str, limit: int = 10_000) -> list[MemoryRecord]:
+        async with self._conn().execute(
+            "SELECT * FROM memories WHERE user_id = ? ORDER BY created_at LIMIT ?",
+            (user_id, limit),
+        ) as cursor:
+            return [_row_to_record(r) for r in await cursor.fetchall()]
+
+    async def delete_by_user(self, user_id: str) -> int:
+        cursor = await self._conn().execute(
+            "DELETE FROM memories WHERE user_id = ?", (user_id,)
+        )
+        await self._conn().commit()
+        return cursor.rowcount
+
     async def count(self, session_id: Optional[str] = None) -> int:
         if session_id:
             async with self._conn().execute(
@@ -212,6 +227,9 @@ class SQLiteBackend(MemoryBackend):
         if mtype := filters.get("memory_type"):
             clauses.append("memory_type = ?")
             params.append(mtype if isinstance(mtype, str) else mtype.value)
+        if uid := filters.get("user_id"):
+            clauses.append("user_id = ?")
+            params.append(uid)
         if not clauses:
             return "", []
         return " WHERE " + " AND ".join(clauses), params

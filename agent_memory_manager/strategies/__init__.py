@@ -5,6 +5,7 @@ from .summarize import SummarizeStrategy
 from .atomic_facts import AtomicFactsStrategy
 from .reflection import ReflectionStrategy
 from .zettelkasten import ZettelkastenStrategy
+from .streaming import StreamingCompressStrategy
 
 __all__ = [
     "MemoryStrategy",
@@ -15,4 +16,5 @@ __all__ = [
     "AtomicFactsStrategy",
     "ReflectionStrategy",
     "ZettelkastenStrategy",
+    "StreamingCompressStrategy",
 ]

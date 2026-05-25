@@ -112,6 +112,20 @@ Respond in JSON:
 }}
 """
 
+USER_PROFILE_SYNTHESIS_PROMPT = """\
+Synthesize a user profile from the following memory facts recorded across multiple sessions.
+
+Memory facts:
+{facts}
+
+Return ONLY this JSON, no explanation:
+{{
+  "facts": ["User is a senior ML engineer.", "User prefers Python and open-source tools."],
+  "preferences": {{"language": "Python", "style": "open-source"}},
+  "raw_summary": "Sam is a senior ML engineer at DataCo building a RAG pipeline."
+}}
+"""
+
 DEDUP_CHECK_PROMPT = """\
 Decide what to do with the new fact given the existing memories.
 

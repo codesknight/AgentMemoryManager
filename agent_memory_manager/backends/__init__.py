@@ -10,7 +10,17 @@ def __getattr__(name: str):
     if name == "QdrantBackend":
         from .qdrant import QdrantBackend  # noqa: PLC0415
         return QdrantBackend
+    if name == "PgVectorBackend":
+        from .pgvector import PgVectorBackend  # noqa: PLC0415
+        return PgVectorBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["MemoryBackend", "InMemoryBackend", "SQLiteBackend", "ChromaBackend", "QdrantBackend"]
+__all__ = [
+    "MemoryBackend",
+    "InMemoryBackend",
+    "SQLiteBackend",
+    "ChromaBackend",
+    "QdrantBackend",
+    "PgVectorBackend",
+]

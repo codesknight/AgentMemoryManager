@@ -34,12 +34,12 @@ class InMemoryBackend(MemoryBackend):
         candidates = list(self._store.values())
 
         if filters:
-            session_id = filters.get("session_id")
-            memory_type = filters.get("memory_type")
-            if session_id:
-                candidates = [r for r in candidates if r.session_id == session_id]
-            if memory_type:
-                candidates = [r for r in candidates if r.memory_type == memory_type]
+            if sid := filters.get("session_id"):
+                candidates = [r for r in candidates if r.session_id == sid]
+            if uid := filters.get("user_id"):
+                candidates = [r for r in candidates if r.user_id == uid]
+            if mtype := filters.get("memory_type"):
+                candidates = [r for r in candidates if r.memory_type == mtype]
 
         scored = [
             (r, cosine_similarity(r.embedding or [], embedding))
@@ -81,3 +81,14 @@ class InMemoryBackend(MemoryBackend):
         if session_id is None:
             return len(self._store)
         return sum(1 for r in self._store.values() if r.session_id == session_id)
+
+    async def list_by_user(self, user_id: str, limit: int = 10_000) -> list[MemoryRecord]:
+        results = [r for r in self._store.values() if r.user_id == user_id]
+        results.sort(key=lambda r: r.created_at)
+        return results[:limit]
+
+    async def delete_by_user(self, user_id: str) -> int:
+        to_delete = [k for k, v in self._store.items() if v.user_id == user_id]
+        for key in to_delete:
+            del self._store[key]
+        return len(to_delete)

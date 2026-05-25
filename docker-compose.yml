@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  memory-api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      AMM_BACKEND: sqlite
+      AMM_DB_PATH: /data/memory.db
+      AMM_GRAPH_DB_PATH: /data/graph.db
+      AMM_PROFILE_DB_PATH: /data/profiles.db
+      AMM_LLM_PROVIDER: openai
+      AMM_LLM_MODEL: gpt-4o-mini
+      AMM_LLM_API_KEY: ${OPENAI_API_KEY}
+    restart: unless-stopped
