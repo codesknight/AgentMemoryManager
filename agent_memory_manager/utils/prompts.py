@@ -15,22 +15,23 @@ Return only the integer (1–10), no explanation.
 """
 
 ATOMIC_FACTS_EXTRACTION_PROMPT = """\
-Extract atomic facts worth remembering long-term from the following conversation.
+Extract atomic facts worth remembering long-term from the conversation below.
 
 Rules:
-1. Each fact must be a concise, self-contained statement (≤ 20 words)
-2. Only extract information with lasting value: preferences, background, decisions, commitments, to-dos
-3. Ignore transient content and small talk
-4. Describe the user in third person ("The user...")
-5. If there is nothing worth remembering, return an empty array
+1. Each fact must be a concise, self-contained statement (≤ 20 words).
+2. Only extract information with lasting value: name, role, preferences, decisions, commitments, ongoing projects.
+3. Ignore greetings, small talk, and transient content.
+4. Describe the user in third person ("The user...").
+5. Respond in the same language as the conversation.
+6. If nothing is worth remembering, return an empty JSON array: []
 
 Conversation:
 {conversation}
 
-Respond in JSON:
+Return ONLY a JSON array, no explanation:
 [
-  {{"fact": "The user is a Python backend engineer working on an AI assistant project.", "importance": 9}},
-  {{"fact": "The user prefers open-source solutions over proprietary ones.", "importance": 7}}
+  {{"fact": "...", "importance": <1-10>}},
+  {{"fact": "...", "importance": <1-10>}}
 ]
 """
 
@@ -112,19 +113,19 @@ Respond in JSON:
 """
 
 DEDUP_CHECK_PROMPT = """\
-Given a new fact and a list of existing memories, determine the correct action.
+Decide what to do with the new fact given the existing memories.
 
 New fact: {new_fact}
 
 Existing memories:
 {existing_memories}
 
-Choose ONE action:
-- "add"    — the new fact is genuinely new information
-- "update" — the new fact updates/corrects an existing memory (provide the memory ID)
-- "delete" — the new fact makes an existing memory obsolete (provide the memory ID)
-- "skip"   — the new fact is already covered by an existing memory
+Rules:
+- "add"    : new fact is genuinely new → target_id is null
+- "update" : new fact corrects or extends an existing memory → provide its id
+- "delete" : new fact makes an existing memory obsolete → provide its id
+- "skip"   : existing memory already covers this fact → target_id is null
 
-Respond in JSON:
-{{"action": "add"|"update"|"delete"|"skip", "target_id": "<memory_id or null>"}}
+Return ONLY this JSON, no explanation:
+{{"action": "add", "target_id": null}}
 """

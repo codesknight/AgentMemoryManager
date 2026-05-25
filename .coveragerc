@@ -6,6 +6,7 @@ omit =
     agent_memory_manager/backends/qdrant.py
     agent_memory_manager/backends/pgvector.py
     agent_memory_manager/embedders/local_embedder.py
+    agent_memory_manager/embedders/ollama_embedder.py
     agent_memory_manager/integrations/langchain.py
     agent_memory_manager/integrations/llamaindex.py
     agent_memory_manager/llm/anthropic.py

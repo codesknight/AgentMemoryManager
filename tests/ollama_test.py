@@ -13,6 +13,7 @@ async def main():
         llm=OpenAIClient(
             model="qwen3:0.6b",
             base_url="http://localhost:11434/v1",
+            keep_alive=0,
         ),
         embedder=OllamaEmbedder(model="nomic-embed-text"),
     )

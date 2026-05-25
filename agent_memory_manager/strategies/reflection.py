@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_memory_manager.models import MemoryRecord, MemoryType, Message
+from agent_memory_manager.utils.json_utils import extract_json
 from agent_memory_manager.utils.prompts import REFLECTION_PROMPT, MEMORY_CONTEXT_ITEM_TEMPLATE
 from agent_memory_manager.utils.scoring import compute_retrieval_score
 from agent_memory_manager.utils.token_counter import count_tokens
@@ -200,7 +201,8 @@ class ReflectionStrategy(MemoryStrategy):
         )
         try:
             response = await llm.generate(prompt, max_tokens=512, temperature=0.3)
-            return json.loads(response)
+            result = extract_json(response)
+            return result if isinstance(result, list) else []
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Reflection synthesis failed: %s", exc)
             return []

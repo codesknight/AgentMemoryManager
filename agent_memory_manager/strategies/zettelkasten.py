@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_memory_manager.models import MemoryRecord, MemoryType, Message
+from agent_memory_manager.utils.json_utils import extract_json
 from agent_memory_manager.utils.prompts import (
     ZETTELKASTEN_NOTE_PROMPT,
     IMPORTANCE_SCORING_PROMPT,
@@ -186,7 +187,7 @@ class ZettelkastenStrategy(MemoryStrategy):
         prompt = ZETTELKASTEN_NOTE_PROMPT.format(conversation=conversation)
         try:
             response = await llm.generate(prompt, max_tokens=256, temperature=0.1)
-            return json.loads(response)
+            return extract_json(response)
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Note creation failed, falling back to raw content: %s", exc)
             # Graceful fallback: store the raw message content as-is

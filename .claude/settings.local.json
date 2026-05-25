@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(python -m pytest tests/unit/ --cov=agent_memory_manager --cov-config=.coveragerc -q)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

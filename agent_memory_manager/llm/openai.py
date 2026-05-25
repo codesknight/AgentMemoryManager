@@ -21,8 +21,12 @@ class OpenAIClient(LLMClient):
         base_url: Optional[str] = None,
         max_retries: int = 10,
         timeout: float = 120.0,
+        keep_alive: Optional[int] = None,
     ) -> None:
         self.model = model
+        # keep_alive controls how long Ollama keeps the model in VRAM after a call.
+        # Set to 0 to release immediately (recommended when sharing GPU with an embedder).
+        self._keep_alive = keep_alive
         # trust_env=False bypasses system/WinINet proxy for local endpoints
         http_client = httpx.AsyncClient(trust_env=False, timeout=timeout)
         self._client = AsyncOpenAI(
@@ -45,12 +49,16 @@ class OpenAIClient(LLMClient):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        extra: dict = {}
+        if self._keep_alive is not None:
+            extra["keep_alive"] = self._keep_alive
+
         response = await self._client.chat.completions.create(
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
             max_tokens=max_tokens,
             temperature=temperature,
-            extra_body={"keep_alive": 0},  # release model from VRAM immediately
+            extra_body=extra or None,
         )
         return response.choices[0].message.content or ""
 

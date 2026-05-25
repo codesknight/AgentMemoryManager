@@ -51,12 +51,67 @@ enhanced_prompt = await manager.build_prompt(
 ```bash
 pip install agent-memory-manager
 
-# With optional backends
+# With optional backends / integrations
 pip install agent-memory-manager[chroma]      # Chroma vector DB
 pip install agent-memory-manager[qdrant]      # Qdrant vector DB
+pip install agent-memory-manager[ollama]      # Local Ollama LLM + embedder
 pip install agent-memory-manager[langchain]   # LangChain integration
 pip install agent-memory-manager[all]         # Everything
 ```
+
+## Quick Start — Local LLM with Ollama
+
+Run a fully local pipeline without any API keys.
+
+**Prerequisites**
+
+```bash
+# Install Ollama: https://ollama.com
+ollama pull qwen3:0.6b          # or any chat model
+ollama pull nomic-embed-text    # dedicated embedding model (recommended)
+
+pip install agent-memory-manager[ollama]
+```
+
+**Code**
+
+```python
+import asyncio
+from agent_memory_manager import MemoryManager, Message, Role
+from agent_memory_manager.backends import InMemoryBackend
+from agent_memory_manager.llm.openai import OpenAIClient
+from agent_memory_manager.embedders.ollama_embedder import OllamaEmbedder
+from agent_memory_manager.strategies import AtomicFactsStrategy
+
+async def main():
+    manager = MemoryManager(
+        backend=InMemoryBackend(),
+        strategy=AtomicFactsStrategy(),
+        llm=OpenAIClient(
+            model="qwen3:0.6b",
+            base_url="http://localhost:11434/v1",
+            keep_alive=0,       # release GPU after each call (recommended for shared VRAM)
+        ),
+        embedder=OllamaEmbedder(model="nomic-embed-text"),
+    )
+    await manager.initialize()
+
+    msgs = [
+        Message(role=Role.USER, content="Hi, I'm Sam, senior ML engineer at DataCo."),
+        Message(role=Role.ASSISTANT, content="Nice to meet you Sam!"),
+    ]
+    result = await manager.add(messages=msgs, session_id="demo")
+    print(f"Stored {len(result.added)} memories")
+
+    prompt = await manager.build_prompt("What does this user do?", "demo")
+    print(prompt)
+
+asyncio.run(main())
+```
+
+> **Windows + system proxy note**: `OpenAIClient` and `OllamaEmbedder` both set
+> `trust_env=False` on their internal HTTP clients, which bypasses Clash / V2Ray /
+> WinINet proxy settings so that local Ollama requests are not routed through a proxy.
 
 ## Architecture
 
@@ -106,9 +161,9 @@ Built on top of frontier research (2023–2025):
 ## Roadmap
 
 - [x] v0.1 — Technical research & design documents
-- [ ] v1.0 — Core memory layers + SQLite/Chroma backends + LangChain integration
-- [ ] v1.5 — Knowledge graph backend + Reflection + Zettelkasten
-- [ ] v2.0 — Temporal KG + Multi-modal + Multi-agent shared memory
+- [x] v1.0 — Core memory layers, all backends, LangChain/LlamaIndex, Ollama support
+- [ ] v1.5 — Neo4j backend, automatic entity extraction, knowledge graph queries
+- [ ] v2.0 — PGVector, streaming compression, multi-modal memory
 
 ## License
 

@@ -5,6 +5,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from agent_memory_manager.models import MemoryRecord, MemoryType, Message
+from agent_memory_manager.utils.json_utils import extract_json
 from agent_memory_manager.utils.token_counter import count_tokens
 from agent_memory_manager.utils.prompts import (
     ATOMIC_FACTS_EXTRACTION_PROMPT,
@@ -145,7 +146,10 @@ class AtomicFactsStrategy(MemoryStrategy):
         prompt = ATOMIC_FACTS_EXTRACTION_PROMPT.format(conversation=conversation)
         try:
             response = await llm.generate(prompt, max_tokens=512, temperature=0.0)
-            return json.loads(response)
+            result = extract_json(response)
+            if not isinstance(result, list):
+                return []
+            return result
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Failed to parse extracted facts: %s", exc)
             return []
@@ -168,8 +172,13 @@ class AtomicFactsStrategy(MemoryStrategy):
         )
         try:
             response = await llm.generate(prompt, max_tokens=64, temperature=0.0)
-            data = json.loads(response)
-            return data.get("action", "add"), data.get("target_id")
+            data = extract_json(response)
+            if not isinstance(data, dict):
+                return "add", None
+            action = data.get("action", "add")
+            if action not in ("add", "update", "delete", "skip"):
+                action = "add"
+            return action, data.get("target_id")
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Dedup check failed, defaulting to add: %s", exc)
             return "add", None
