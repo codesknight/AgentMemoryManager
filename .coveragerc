@@ -1,0 +1,19 @@
+[run]
+source = agent_memory_manager
+omit =
+    # Optional-dependency modules — skipped when deps not installed
+    agent_memory_manager/backends/chroma.py
+    agent_memory_manager/backends/pgvector.py
+    agent_memory_manager/embedders/local_embedder.py
+    agent_memory_manager/integrations/langchain.py
+    agent_memory_manager/integrations/llamaindex.py
+    agent_memory_manager/llm/anthropic.py
+    agent_memory_manager/llm/openai.py
+    agent_memory_manager/embedders/openai_embedder.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    \.\.\.
