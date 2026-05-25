@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-memory-manager"
-version = "0.1.0"
+version = "1.0.0"
 description = "Pluggable memory management for LLM agents — solving context degradation in long conversations"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 keywords = ["llm", "agent", "memory", "context", "rag", "langchain"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",

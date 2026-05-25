@@ -7,7 +7,10 @@ def __getattr__(name: str):
     if name == "ChromaBackend":
         from .chroma import ChromaBackend  # noqa: PLC0415
         return ChromaBackend
+    if name == "QdrantBackend":
+        from .qdrant import QdrantBackend  # noqa: PLC0415
+        return QdrantBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["MemoryBackend", "InMemoryBackend", "SQLiteBackend", "ChromaBackend"]
+__all__ = ["MemoryBackend", "InMemoryBackend", "SQLiteBackend", "ChromaBackend", "QdrantBackend"]

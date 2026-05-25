@@ -73,6 +73,44 @@ MEMORY_INJECTION_TEMPLATE = """\
 
 MEMORY_CONTEXT_ITEM_TEMPLATE = "- {content}"
 
+ZETTELKASTEN_NOTE_PROMPT = """\
+Create a structured Zettelkasten note from the following conversation.
+
+Rules:
+1. "content": one concise atomic statement capturing the key insight (≤ 25 words)
+2. "keywords": 2–5 lowercase tags for indexing (topics, entities, concepts)
+3. "context": one sentence explaining WHY this is noteworthy
+
+Conversation:
+{conversation}
+
+Respond in JSON:
+{{
+  "content": "The user is building a RAG pipeline for internal documentation at TechCorp.",
+  "keywords": ["rag", "documentation", "techcorp", "project"],
+  "context": "User revealed a concrete ongoing project with specific technical scope."
+}}
+"""
+
+ENTITY_EXTRACTION_PROMPT = """\
+Extract named entities and their relationships from the following conversation.
+Only extract entities that are clearly stated — do not infer.
+
+Conversation:
+{conversation}
+
+Respond in JSON:
+{{
+  "entities": [
+    {{"name": "Alex", "type": "person", "attributes": {{"role": "data scientist"}}}},
+    {{"name": "TechCorp", "type": "organization", "attributes": {{}}}}
+  ],
+  "relations": [
+    {{"subject": "Alex", "predicate": "works_at", "object": "TechCorp", "confidence": 0.95}}
+  ]
+}}
+"""
+
 DEDUP_CHECK_PROMPT = """\
 Given a new fact and a list of existing memories, determine the correct action.
 

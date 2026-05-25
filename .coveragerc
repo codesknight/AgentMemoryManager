@@ -3,6 +3,7 @@ source = agent_memory_manager
 omit =
     # Optional-dependency modules — skipped when deps not installed
     agent_memory_manager/backends/chroma.py
+    agent_memory_manager/backends/qdrant.py
     agent_memory_manager/backends/pgvector.py
     agent_memory_manager/embedders/local_embedder.py
     agent_memory_manager/integrations/langchain.py
