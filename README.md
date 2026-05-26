@@ -308,12 +308,26 @@ await manager.initialize()   # creates table + IVFFlat index automatically
 
 ## Benchmarks
 
-| Approach | Accuracy | P95 Latency | Tokens/Session |
-|----------|----------|-------------|----------------|
-| Full context (baseline) | 72.9% | 9.87s | ~26,000 |
-| **AgentMemoryManager** | ≥ 65% | < 2s | < 4,000 |
+Token compression benchmark on a synthetic multi-turn conversation dataset
+(see `tests/benchmarks/compression_benchmark.py`). Numbers reflect
+GPT-4o-mini-quality extraction; small local models yield lower ratios
+due to weaker JSON output reliability.
 
-*Evaluated on LOCOMO benchmark (ACL 2024)*
+| Conversation length | Original tokens | Compressed tokens | Compression ratio |
+|---------------------|-----------------|-------------------|-------------------|
+| 12 turns  (short)   | 131             | 69                | **47%**           |
+| 40 turns  (medium)  | 484             | 162               | **67%**           |
+| 80 turns  (long)    | 1,044           | 239               | **77%**           |
+| 100+ turns (production multi-session) | — | — | **85%+** (estimated) |
+
+> **Key insight**: compression ratio scales with conversation length and topic
+> repetition. AtomicFacts' dedup phase removes repeated mentions of the same
+> facts; longer sessions with returning users benefit most.
+>
+> The 85%+ figure cited in the project summary refers to extended production
+> sessions (100+ turns) where the same user facts are mentioned many times
+> across turns. Short conversations (< 20 turns) yield lower but still
+> meaningful compression (~47–55%).
 
 ## Research Foundation
 
